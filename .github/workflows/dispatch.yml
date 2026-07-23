@@ -1,0 +1,98 @@
+name: mx-dispatch
+
+# ============================================================================
+# 免费版 GitHub 适配（2026-07）：
+# 私有仓库 mingxin-marketing-cron 的 Actions 受 2,000 分钟/月免费额度限制，
+# 额度耗尽后账户级计费封锁导致调度连败。本仓库为公开仓库——
+# 公开仓库的 GitHub Actions 标准运行器分钟数完全免费、不计额度，
+# 高频轮询通道在免费版下可持续运行。
+#
+# 仓库内容仅调度 YAML；密钥走 GitHub Secrets（CRON_SECRET），
+# 引擎接口全部要求 Bearer 鉴权，公开无泄露面。
+# ============================================================================
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "5 * * * *"            # 每小时：回复扫描 → 潜客挖掘 → 外联
+    - cron: "0 1,7,13,17,21 * * *" # 每日 5 次内容生产
+    - cron: "0 2 * * *"            # 每日搜索引擎主动推送
+    - cron: "0 1 * * 1"            # 每周一 AI 周复盘
+    - cron: "0 6,18 * * *"         # 每日 2 次 SEO 审计
+    - cron: "30 3,15 * * *"        # 每日 2 次收录快照 + AI 引用率
+    - cron: "20 4,16 * * *"        # 每日 2 次翻译入 /en/insights
+    - cron: "0 5,11,17 * * *"      # 每日 3 次四平台内容变体
+    - cron: "30 5,13 * * *"        # 每日 2 次三方平台发布
+    - cron: "0 6 * * 1"            # 每周一媒体投稿稿件起草
+    - cron: "40 6 * * *"           # 每日存量文章 answer-first 刷新
+    - cron: "15 7 * * 2,5"         # 每周二/五英文联合发布
+    - cron: "45 7 * * 1"           # 每周一播客
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15            # 防护：单次运行封顶
+    steps:
+      - name: Route by schedule
+        env:
+          BASE: https://mingxinstorage.xyz
+          SECRET: ${{ secrets.CRON_SECRET }}
+          EVENT: ${{ github.event.schedule }}
+        run: |
+          set -e
+          call() {
+            echo "POST $1"
+            curl -sS -X POST -H "Authorization: Bearer $SECRET" --max-time 280 "$BASE$1" | head -c 800
+            echo
+          }
+          if [ -z "$EVENT" ]; then
+            call /api/engine/replies
+            call /api/engine/prospect
+            call /api/engine/outreach
+            call /api/engine/content
+            call /api/seo/ping
+            call /api/engine/seo-audit
+            call /api/engine/translate
+            call /api/engine/seo-snapshot
+            call /api/engine/geo-monitor
+            call /api/engine/geo-content
+            call /api/engine/publish
+            call /api/engine/media-draft
+            call /api/engine/refresh
+            call /api/engine/syndicate
+            call /api/engine/podcast
+            exit 0
+          fi
+          case "$EVENT" in
+            # 每小时：回复扫描 → 挖掘一批潜客 → 外联（幂等：当日批次已存在则跳过生成）
+            "5 * * * *")
+              call /api/engine/replies
+              call /api/engine/prospect
+              call /api/engine/outreach
+              ;;
+            # 每日 5 次内容生产（幂等：当日题量额满则跳过）
+            "0 1,7,13,17,21 * * *") call /api/engine/content ;;
+            "0 2 * * *") call /api/seo/ping ;;
+            "0 1 * * 1") call /api/engine/review ;;
+            # 每日 2 次 SEO 审计（早晚错峰）
+            "0 6,18 * * *") call /api/engine/seo-audit ;;
+            # 每日 2 次收录快照（含 GSC 拉取）+ AI 引用率日测（连调两次覆盖全部探测组）
+            "30 3,15 * * *")
+              call /api/engine/seo-snapshot
+              call /api/engine/geo-monitor
+              call /api/engine/geo-monitor
+              ;;
+            # 每日 2 次翻译最新文章入 /en/insights（英文 AI 问答面）
+            "20 4,16 * * *") call /api/engine/translate ;;
+            # 每日 3 次四平台内容变体生成（DeepSeek/元宝/千问/豆包适配层）
+            "0 5,11,17 * * *") call /api/engine/geo-content ;;
+            # 每日 2 次三方平台发布（微信官方 API 自动发布 + 知乎/CSDN 导出包入队）
+            "30 5,13 * * *") call /api/engine/publish ;;
+            # 每周一媒体投稿稿件起草（白名单渠道，稿件先备好、提交待开号）
+            "0 6 * * 1") call /api/engine/media-draft ;;
+            # V2 工作流 13：每日 answer-first 重构 / 新鲜度刷新（存量文章轮换）
+            "40 6 * * *") call /api/engine/refresh ;;
+            # V2 工作流 14：每周二/五英文联合发布 dev.to + Hashnode（canonical 回指官网）
+            "15 7 * * 2,5") call /api/engine/syndicate ;;
+            # V2 工作流 15：每周一播客（脚本→TTS→RSS，周报之后运行以复用其素材）
+            "45 7 * * 1") call /api/engine/podcast ;;
+          esac
